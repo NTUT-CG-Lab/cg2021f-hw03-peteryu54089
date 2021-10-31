@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<title>three.js webgl - loaders - MMD loader</title>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+	<link type="text/css" rel="stylesheet" href="main.css">
+	<style>
+		body {
+			background-color: #fff;
+			color: #444;
+		}
+
+		a {
+			color: #08f;
+		}
+	</style>
+</head>
+
+<body>
+	<div id="info"></div>
+
+	<script src="js/libs/ammo.wasm.js"></script>
+	<script src="scoreoutputer.min.js"></script>
+	<script>
+		// 建構子 ScoreOutputer 接受一個字串，該字串為 csv 的檔案名稱
+		// 以下面範例，檔名就為 "109598105(總分: 6).csv"
+		var so = new ScoreOutputer("109598035");
+		so.installCSS(function () {
+			// 安裝 bootstrap 的 css，如果在 html 上方引用 bootstrap 5.1.1 的話就不用使用 installCSS ，注意一定要 bootstrap css 5.1.1 版
+			// installCSS 接收一個 callback 當作參數，作為成功安裝 bootstrap css 的回呼函式
+
+			//加入項目，分數，完成狀況
+			//第一個參數為 項目名稱
+			//第2個參數為 項目分數
+			//第3個參數為 完成狀況，有完成 true/未完成 false
+			//有幾個項目就呼叫幾個 addChild
+			//addChild 要比 renderModal 先呼叫
+			so.addChild("繪製出 5 個畫面", 1, true);
+			so.addChild("回答問題", 1, true);
+			so.addChild("可按鍵選擇上 / 下一隻角色", 1, true);
+			so.addChild("讀取作業 2 儲存的座標點在眼睛上繪製出分割線", 1, true);
+			so.addChild("可選擇當下控制哪個虹膜", 1, true);
+			so.addChild("按滑鼠左鍵控制虹膜移動，右鍵停止", 2, true);
+			so.addChild("複製參數至對應目標參數", 2, true);
+			so.addChild("可儲存虹膜轉動角度", 1, true);
+
+			//產生自評表，參數如下所示
+			so.renderModal(
+				//1. 自評表插入位置 (預設 document.body)
+				document.body,
+				//2. 自評表背景 (預設紅色)
+				'rgba(100,45,58,1)',
+				//3. 自評表文字顏色 (預設白色)
+				'white',
+				//4. 自評表文字大小 (預設 14pt)
+				'15pt',
+				//5. 自評表 checkbox 文字大小 (預設多少忘了)
+				'15px',
+				//6. 自評表標題 (預設 "自我評分表")
+				dialogTitle = "自我評分表"
+			);
+
+			//設定下載按鈕 <-- 一定要呼叫這個函數，不然沒有下載功能
+			so.installDownloadBtn();
+
+			//產生 "開啟自評表按鈕"
+			so.renderBtn(
+				//自評表按鈕插入位置
+				document.querySelector("#info"),
+				//自評表按鈕文字
+				"開啟自評表"
+			);
+		});
+	</script>
+	<script type="module">
+
+		import * as THREE from './build/three.module.js';
+		import { GUI } from './jsm/libs/dat.gui.module.js';
+		import { OrbitControls } from './jsm/controls/OrbitControls.js';
+		import { OutlineEffect } from './jsm/effects/OutlineEffect.js';
+		import { MMDLoader } from './jsm/loaders/MMDLoader.js';
+		import { MMDAnimationHelper } from './jsm/animation/MMDAnimationHelper.js';
+
+		let scenes, renderer, effect;
+		let mesh, helper;
+		let SCREEN_WIDTH = window.innerWidth;
+		let SCREEN_HEIGHT = window.innerHeight;
+		let aspect = SCREEN_WIDTH / SCREEN_HEIGHT;
+		let frustumSize = 30;
+		let camera, camera2, camera3, camera4, camera5;
+
+		const MODELS = 3, SCENES = 4, RIGHT_AND_LEFT = 2, ROW_COL_LINES = 14, SCENE_FLAGS = 8;
+		let isAlert1 = true, isAlert2 = true, isHoldEye = false, mouse = new THREE.Vector3();
+		let irisAngles = [
+			[[-8.5, 11.5], [-8.5, 11.5], [-8.5, 11.5], [-8.5, 11.5], [-12.6, 8], [-8, 12.6], [-12.6, 8], [-8, 12.6]], 
+			[[-14.7, 16.7], [-14.7, 16.7], [-14.7, 16.7], [-14.7, 16.7], [-20.9, 10.2], [-10.2, 20.9], [-20.9, 10.2], [-10.2, 20.9]], 
+			[[-18.2, 14], [-18.2, 14], [-18.2, 14], [-18.2, 14], [-16.2, 10.9], [-10.9, 16.2], [-16.2, 10.9], [-10.9, 16.2]]
+		];
+		let lines = [], meshes = [], offsetYs = [8.2, 4.5, 5.5], eyeIndexes = [[88, 86], [13, 11], [51, 49]];
+		let modelIdx = 0, sceneIdx = 0, sceneFlag = 0;
+		let modelData, points, bias, angle, mouseFlagX, mouseFlagY;
+
+		for (let i = 0; i < MODELS; i++) {
+			lines.push([]);
+			meshes.push([]);
+			for (let j = 0; j < SCENES; j++) {
+				lines[i].push([]);
+				meshes[i].push(null);
+				for (let k = 0; k < RIGHT_AND_LEFT; k++) {
+					lines[i][j].push([]);
+					for (let l = 0; l < ROW_COL_LINES; l++) {
+						lines[i][j][k].push(null);
+					}
+				}
+			}
+		}
+
+		Ammo().then(function (AmmoLib) {
+
+			Ammo = AmmoLib;
+
+			init();
+			animate();
+
+		});
+
+		function init() {
+
+			const container = document.createElement('div');
+			document.body.appendChild(container);
+
+			camera = new THREE.OrthographicCamera(0.5 * frustumSize * aspect / - 2, 0.5 * frustumSize * aspect / 2, frustumSize / 2, frustumSize / - 2, 0.1, 1000);
+			camera2 = new THREE.OrthographicCamera(0.25 * frustumSize * aspect / - 2, 0.25 * frustumSize * aspect / 2, 0.5 * frustumSize / 2, 0.5 * frustumSize / - 2, 0.1, 1000);
+			camera3 = new THREE.OrthographicCamera(0.25 * frustumSize * aspect / - 2, 0.25 * frustumSize * aspect / 2, 0.5 * frustumSize / 2, 0.5 * frustumSize / - 2, 0.1, 1000);
+			camera4 = new THREE.OrthographicCamera(0.25 * frustumSize * aspect / - 2, 0.25 * frustumSize * aspect / 2, 0.5 * frustumSize / 2, 0.5 * frustumSize / - 2, 0.1, 1000);
+			camera5 = new THREE.OrthographicCamera(0.25 * frustumSize * aspect / - 2, 0.25 * frustumSize * aspect / 2, 0.5 * frustumSize / 2, 0.5 * frustumSize / - 2, 0.1, 1000);
+			
+			camera.position.x = -0.55;
+			camera.position.z = 30;
+			camera2.position.z = 30;
+			camera3.position.z = 30;
+			camera4.position.z = 30;
+			camera5.position.z = 30;
+
+			camera.zoom = 39.5;
+			camera2.zoom = 9.5;
+			camera3.zoom = 9.5;
+			camera4.zoom = 9.5;
+			camera5.zoom = 9.5;
+
+			camera.updateProjectionMatrix();
+			camera2.updateProjectionMatrix();
+			camera3.updateProjectionMatrix();
+			camera4.updateProjectionMatrix();
+			camera5.updateProjectionMatrix();
+
+			// scene
+
+			scenes = [new THREE.Scene(), new THREE.Scene(), new THREE.Scene(), new THREE.Scene(), new THREE.Scene()];
+
+			const ambient = [new THREE.AmbientLight(0x666666), new THREE.AmbientLight(0x666666), new THREE.AmbientLight(0x666666), new THREE.AmbientLight(0x666666), new THREE.AmbientLight(0x666666)];
+			for (let i = 0; i < SCENES; i++) {
+				scenes[i].add(ambient[i]);
+			}
+
+			const directionalLight = [new THREE.DirectionalLight(0x887766), new THREE.DirectionalLight(0x887766), new THREE.DirectionalLight(0x887766), new THREE.DirectionalLight(0x887766), new THREE.DirectionalLight(0x887766)];
+			for (let i = 0; i < SCENES; i++) {
+				directionalLight[i].position.set(- 1, 1, 1).normalize();
+				scenes[i].add(directionalLight[i]);
+			}
+
+			readTextFile('model_data.json', function(text) {
+				modelData = JSON.parse(text);
+				for (let i = 0; i < MODELS; i++) {
+					points = [];
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_1 - 0.5, modelData.modellist[i].line_locationy_1 + (camera.zoom / (camera.zoom * camera.zoom)) - offsetYs[i], 10));
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_1 + 0.5, modelData.modellist[i].line_locationy_1 + (camera.zoom / (camera.zoom * camera.zoom)) - offsetYs[i], 10));
+					for (let j = 0; j < SCENES; j++) {
+						lines[i][j][1][0] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x00ff00 }));
+						lines[i][j][0][0] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x87cefa }));
+						lines[i][j][0][0].scale.multiply(new THREE.Vector3(-1, 1, 1));
+					}
+
+					bias = (modelData.modellist[i].line_locationy_1 - modelData.modellist[i].line_locationy_3) / 4;
+
+					points = [];
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_1 - 0.5, modelData.modellist[i].line_locationy_1 - bias + (camera.zoom / (camera.zoom * camera.zoom)) - offsetYs[i], 10));
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_1 + 0.5, modelData.modellist[i].line_locationy_1 - bias + (camera.zoom / (camera.zoom * camera.zoom)) - offsetYs[i], 10));
+					for (let j = 0; j < SCENES; j++) {
+						lines[i][j][1][1] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x00ff00 }));
+						lines[i][j][0][1] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x87cefa }));
+						lines[i][j][0][1].scale.multiply(new THREE.Vector3(-1, 1, 1));
+					}
+
+					points = [];
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_1 - 0.5, modelData.modellist[i].line_locationy_1 - (bias * 2) + (camera.zoom / (camera.zoom * camera.zoom)) - offsetYs[i], 10));
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_1 + 0.5, modelData.modellist[i].line_locationy_1 - (bias * 2) + (camera.zoom / (camera.zoom * camera.zoom)) - offsetYs[i], 10));
+					for (let j = 0; j < SCENES; j++) {
+						lines[i][j][1][2] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x00ff00 }));
+						lines[i][j][0][2] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x87cefa }));
+						lines[i][j][0][2].scale.multiply(new THREE.Vector3(-1, 1, 1));
+					}
+
+					points = [];
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_1 - 0.5, modelData.modellist[i].line_locationy_1 - (bias * 3) + (camera.zoom / (camera.zoom * camera.zoom)) - offsetYs[i], 10));
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_1 + 0.5, modelData.modellist[i].line_locationy_1 - (bias * 3) + (camera.zoom / (camera.zoom * camera.zoom)) - offsetYs[i], 10));
+					for (let j = 0; j < SCENES; j++) {
+						lines[i][j][1][3] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x00ff00 }));
+						lines[i][j][0][3] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x87cefa }));
+						lines[i][j][0][3].scale.multiply(new THREE.Vector3(-1, 1, 1));
+					}
+
+					points = [];
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_3 - 0.5, modelData.modellist[i].line_locationy_3 + (camera.zoom / (camera.zoom * camera.zoom)) - offsetYs[i], 10));
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_3 + 0.5, modelData.modellist[i].line_locationy_3 + (camera.zoom / (camera.zoom * camera.zoom)) - offsetYs[i], 10));
+					for (let j = 0; j < SCENES; j++) {
+						lines[i][j][1][4] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x00ff00 }));
+						lines[i][j][0][4] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x87cefa }));
+						lines[i][j][0][4].scale.multiply(new THREE.Vector3(-1, 1, 1));
+					}
+
+					//
+
+					points = [];
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_2, modelData.modellist[i].line_locationy_2 + (camera.zoom / (camera.zoom * camera.zoom)) - 1 - offsetYs[i], 10));
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_2, modelData.modellist[i].line_locationy_2 + (camera.zoom / (camera.zoom * camera.zoom)) + 1 - offsetYs[i], 10));
+					for (let j = 0; j < SCENES; j++) {
+						lines[i][j][1][5] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0xff0000 }));
+						lines[i][j][0][5] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x800080 }));
+						lines[i][j][0][5].scale.multiply(new THREE.Vector3(-1, 1, 1));
+					}
+
+					bias = (modelData.modellist[i].line_locationx_2 - modelData.modellist[i].line_locationx_4) / 8;
+
+					points = [];
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_2 - bias, modelData.modellist[i].line_locationy_2 + (camera.zoom / (camera.zoom * camera.zoom)) - 1 - offsetYs[i], 10));
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_2 - bias, modelData.modellist[i].line_locationy_2 + (camera.zoom / (camera.zoom * camera.zoom)) + 1 - offsetYs[i], 10));
+					for (let j = 0; j < SCENES; j++) {
+						lines[i][j][1][6] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0xff0000 }));
+						lines[i][j][0][6] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x800080 }));
+						lines[i][j][0][6].scale.multiply(new THREE.Vector3(-1, 1, 1));
+					}
+
+					points = [];
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_2 - (bias * 2), modelData.modellist[i].line_locationy_2 + (camera.zoom / (camera.zoom * camera.zoom)) - 1 - offsetYs[i], 10));
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_2 - (bias * 2), modelData.modellist[i].line_locationy_2 + (camera.zoom / (camera.zoom * camera.zoom)) + 1 - offsetYs[i], 10));
+					for (let j = 0; j < SCENES; j++) {
+						lines[i][j][1][7] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0xff0000 }));
+						lines[i][j][0][7] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x800080 }));
+						lines[i][j][0][7].scale.multiply(new THREE.Vector3(-1, 1, 1));
+					}
+
+					points = [];
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_2 - (bias * 3), modelData.modellist[i].line_locationy_2 + (camera.zoom / (camera.zoom * camera.zoom)) - 1 - offsetYs[i], 10));
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_2 - (bias * 3), modelData.modellist[i].line_locationy_2 + (camera.zoom / (camera.zoom * camera.zoom)) + 1 - offsetYs[i], 10));
+					for (let j = 0; j < SCENES; j++) {
+						lines[i][j][1][8] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0xff0000 }));
+						lines[i][j][0][8] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x800080 }));
+						lines[i][j][0][8].scale.multiply(new THREE.Vector3(-1, 1, 1));
+					}
+
+					points = [];
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_2 - (bias * 4), modelData.modellist[i].line_locationy_2 + (camera.zoom / (camera.zoom * camera.zoom)) - 1 - offsetYs[i], 10));
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_2 - (bias * 4), modelData.modellist[i].line_locationy_2 + (camera.zoom / (camera.zoom * camera.zoom)) + 1 - offsetYs[i], 10));
+					for (let j = 0; j < SCENES; j++) {
+						lines[i][j][1][9] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0xff0000 }));
+						lines[i][j][0][9] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x800080 }));
+						lines[i][j][0][9].scale.multiply(new THREE.Vector3(-1, 1, 1));
+					}
+
+					points = [];
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_2 - (bias * 5), modelData.modellist[i].line_locationy_2 + (camera.zoom / (camera.zoom * camera.zoom)) - 1 - offsetYs[i], 10));
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_2 - (bias * 5), modelData.modellist[i].line_locationy_2 + (camera.zoom / (camera.zoom * camera.zoom)) + 1 - offsetYs[i], 10));
+					for (let j = 0; j < SCENES; j++) {
+						lines[i][j][1][10] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0xff0000 }));
+						lines[i][j][0][10] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x800080 }));
+						lines[i][j][0][10].scale.multiply(new THREE.Vector3(-1, 1, 1));
+					}
+
+					points = [];
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_2 - (bias * 6), modelData.modellist[i].line_locationy_2 + (camera.zoom / (camera.zoom * camera.zoom)) - 1 - offsetYs[i], 10));
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_2 - (bias * 6), modelData.modellist[i].line_locationy_2 + (camera.zoom / (camera.zoom * camera.zoom)) + 1 - offsetYs[i], 10));
+					for (let j = 0; j < SCENES; j++) {
+						lines[i][j][1][11] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0xff0000 }));
+						lines[i][j][0][11] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x800080 }));
+						lines[i][j][0][11].scale.multiply(new THREE.Vector3(-1, 1, 1));
+					}
+
+					points = [];
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_2 - (bias * 7), modelData.modellist[i].line_locationy_2 + (camera.zoom / (camera.zoom * camera.zoom)) - 1 - offsetYs[i], 10));
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_2 - (bias * 7), modelData.modellist[i].line_locationy_2 + (camera.zoom / (camera.zoom * camera.zoom)) + 1 - offsetYs[i], 10));
+					for (let j = 0; j < SCENES; j++) {
+						lines[i][j][1][12] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0xff0000 }));
+						lines[i][j][0][12] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x800080 }));
+						lines[i][j][0][12].scale.multiply(new THREE.Vector3(-1, 1, 1));
+					}
+
+					points = [];
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_4, modelData.modellist[i].line_locationy_4 + (camera.zoom / (camera.zoom * camera.zoom)) - 1 - offsetYs[i], 10));
+					points.push(new THREE.Vector3(modelData.modellist[i].line_locationx_4, modelData.modellist[i].line_locationy_4 + (camera.zoom / (camera.zoom * camera.zoom)) + 1 - offsetYs[i], 10));
+					for (let j = 0; j < SCENES; j++) {
+						lines[i][j][1][13] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0xff0000 }));
+						lines[i][j][0][13] = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x800080 }));
+						lines[i][j][0][13].scale.multiply(new THREE.Vector3(-1, 1, 1));
+					}
+				}
+				for (let i = 0; i < ROW_COL_LINES; i++) {
+					scenes[sceneIdx].add(lines[modelIdx][sceneIdx][sceneFlag % 2][i]);
+				}
+			});
+
+			//
+
+			renderer = new THREE.WebGLRenderer({ antialias: true });
+			renderer.setPixelRatio(window.devicePixelRatio);
+			renderer.setSize(window.innerWidth, window.innerHeight);
+			container.appendChild(renderer.domElement);
+			renderer.autoClear = false;
+			effect = new OutlineEffect(renderer);
+
+			// model
+
+			function onProgress(xhr) {
+
+				if (xhr.lengthComputable) {
+
+					const percentComplete = xhr.loaded / xhr.total * 100;
+					console.log(Math.round(percentComplete, 2) + '% downloaded');
+
+				}
+
+			}
+
+			const modelFiles = [
+				'models/mmd/kizunaai/kizunaai.pmx',
+				'models/mmd/るいのれ式物述有栖_配布用フォルダ/物述有栖.pmx',
+				'models/mmd/『天宮こころ(Kokoro Amamiya)』/『天宮こころ(Kokoro Amamiya)』.pmx'
+			];
+
+			helper = new MMDAnimationHelper();
+
+			const loader = new MMDLoader();
+
+			for (let i = 0; i < MODELS; i++) {
+				for (let j = 0; j < SCENES; j++) {
+					loader.load(modelFiles[i], function (object) {
+						mesh = object;
+						mesh.position.y = - (offsetYs[i] + 10);
+						meshes[i][j] = mesh;
+						if (j === 0) {
+							meshes[i][j].skeleton.bones[eyeIndexes[i][0]].rotation.x = -irisAngles[i][0][0] * Math.PI / 180;
+							meshes[i][j].skeleton.bones[eyeIndexes[i][1]].rotation.x = -irisAngles[i][1][0] * Math.PI / 180;
+						}
+						if (j === 1) {
+							meshes[i][j].skeleton.bones[eyeIndexes[i][0]].rotation.x = -irisAngles[i][2][1] * Math.PI / 180;
+							meshes[i][j].skeleton.bones[eyeIndexes[i][1]].rotation.x = -irisAngles[i][3][1] * Math.PI / 180;
+						}
+						if (j === 2) {
+							meshes[i][j].skeleton.bones[eyeIndexes[i][0]].rotation.y = irisAngles[i][4][1] * Math.PI / 180;
+							meshes[i][j].skeleton.bones[eyeIndexes[i][1]].rotation.y = irisAngles[i][5][1] * Math.PI / 180;
+						}
+						if (j === 3) {
+							meshes[i][j].skeleton.bones[eyeIndexes[i][0]].rotation.y = irisAngles[i][6][0] * Math.PI / 180;
+							meshes[i][j].skeleton.bones[eyeIndexes[i][1]].rotation.y = irisAngles[i][7][0] * Math.PI / 180;
+						}
+						if (i === modelIdx) {
+							scenes[j].add(meshes[i][j]);
+						}
+					}, onProgress, null);
+				}
+			}
+
+			//
+
+			window.addEventListener('resize', onWindowResize);
+			document.addEventListener('keyup', onDocumentKeyUp);
+			document.addEventListener('mouseup', onMouseUp, false);
+			document.addEventListener('mousemove', onMouseMove, false);
+
+			window.addEventListener('contextmenu', function (e) { 
+				e.preventDefault(); 
+			}, false);
+
+			//
+
+			function onDocumentKeyUp(event) {
+				const keyCode = event.keyCode;
+				event.preventDefault();
+				isHoldEye = false;
+				document.body.style.cursor = 'default';
+				// A or D
+				if (keyCode === 65 || keyCode === 68) {
+					for (let i = 0; i < SCENES; i++) {
+						for (let j = 0; j < RIGHT_AND_LEFT; j++) {
+							for (let k = 0; k < ROW_COL_LINES; k++) {
+								scenes[i].remove(lines[modelIdx][i][j][k]);
+							}
+						}
+					}
+					for (let i = 0; i < SCENES; i++) {
+						scenes[i].remove(meshes[modelIdx][i]);
+					}
+					// A
+					if (keyCode === 65) {
+						if (--modelIdx < 0) {
+							modelIdx = MODELS - 1;
+						}
+					}
+					// D
+					if (keyCode === 68) {
+						if (++modelIdx === MODELS) {
+							modelIdx = 0;
+						}
+					}
+					// both
+					for (let i = 0; i < SCENES; i++) {
+						scenes[i].add(meshes[modelIdx][i]);
+					}
+					for (let i = 0; i < ROW_COL_LINES; i++) {
+						scenes[sceneIdx].add(lines[modelIdx][sceneIdx][sceneFlag % 2][i]);
+					}
+					if (isAlert1 && modelIdx === 1) {
+						alert('載入模型可能需要一些時間...');
+						isAlert1 = false;
+					}
+					if (isAlert2 && modelIdx === 2) {
+						alert('載入模型可能需要一些時間...');
+						isAlert2 = false;
+					}
+				}
+				// 1 or 2
+				if (keyCode === 49 || keyCode === 50) {
+					for (let i = 0; i < RIGHT_AND_LEFT; i++) {
+						for (let j = 0; j < ROW_COL_LINES; j++) {
+							scenes[sceneIdx].remove(lines[modelIdx][sceneIdx][i][j]);
+						}
+					}
+					// 1
+					if (keyCode === 49) {
+						if (--sceneFlag < 0) {
+							sceneFlag = SCENE_FLAGS - 1;
+						}
+					}
+					//2
+					if (keyCode === 50) {
+						if (++sceneFlag === SCENE_FLAGS) {
+							sceneFlag = 0;
+						}
+					}
+					// both
+					if (sceneFlag === 0 || sceneFlag === 1) {
+						sceneIdx = 0;
+					}
+					if (sceneFlag === 2 || sceneFlag === 3) {
+						sceneIdx = 1;
+					}
+					if (sceneFlag === 4 || sceneFlag === 5) {
+						sceneIdx = 2;
+					}
+					if (sceneFlag === 6 || sceneFlag === 7) {
+						sceneIdx = 3;
+					}
+					if (sceneFlag % 2 === 0) {
+						camera.position.x = -0.55;
+					} else {
+						camera.position.x = 0.55;
+					}
+					for (let i = 0; i < ROW_COL_LINES; i++) {
+						scenes[sceneIdx].add(lines[modelIdx][sceneIdx][sceneFlag % 2][i]);
+					}
+				}
+				// Q
+				if (keyCode === 81) {
+					if (sceneFlag === 0 || sceneFlag === 2) {
+						meshes[modelIdx][sceneIdx].skeleton.bones[eyeIndexes[modelIdx][1]].rotation.x = meshes[modelIdx][sceneIdx].skeleton.bones[eyeIndexes[modelIdx][0]].rotation.x;
+					}
+					if (sceneFlag === 4) {
+						meshes[modelIdx][sceneIdx + 1].skeleton.bones[eyeIndexes[modelIdx][1]].rotation.y = -meshes[modelIdx][sceneIdx].skeleton.bones[eyeIndexes[modelIdx][0]].rotation.y;
+					}
+					if (sceneFlag === 6) {
+						meshes[modelIdx][sceneIdx - 1].skeleton.bones[eyeIndexes[modelIdx][1]].rotation.y = -meshes[modelIdx][sceneIdx].skeleton.bones[eyeIndexes[modelIdx][0]].rotation.y;
+					}
+				}
+				// S
+				if (keyCode === 83) {
+					let model_data = {
+						modellist: [{
+								location: modelFiles[0],
+								line_locationx_1: modelData.modellist[0].line_locationx_1,
+								line_locationy_1: modelData.modellist[0].line_locationy_1,
+								line_locationx_2: modelData.modellist[0].line_locationx_2,
+								line_locationy_2: modelData.modellist[0].line_locationy_2,
+								line_locationx_3: modelData.modellist[0].line_locationx_3,
+								line_locationy_3: modelData.modellist[0].line_locationy_3,
+								line_locationx_4: modelData.modellist[0].line_locationx_4,
+								line_locationy_4: modelData.modellist[0].line_locationy_4,
+								left_x_negative_angle: irisAngles[0][0][0],
+								left_x_positive_angle: irisAngles[0][0][1],
+								right_x_negative_angle: irisAngles[0][1][0],
+								right_x_positive_angle: irisAngles[0][1][1],
+								left_y_negative_angle: irisAngles[0][4][0],
+								left_y_positive_angle: irisAngles[0][4][1],
+								right_y_negative_angle: irisAngles[0][5][0],
+								right_y_positive_angle: irisAngles[0][5][1]
+							}, {
+								location: modelFiles[1],
+								line_locationx_1: modelData.modellist[1].line_locationx_1,
+								line_locationy_1: modelData.modellist[1].line_locationy_1,
+								line_locationx_2: modelData.modellist[1].line_locationx_2,
+								line_locationy_2: modelData.modellist[1].line_locationy_2,
+								line_locationx_3: modelData.modellist[1].line_locationx_3,
+								line_locationy_3: modelData.modellist[1].line_locationy_3,
+								line_locationx_4: modelData.modellist[1].line_locationx_4,
+								line_locationy_4: modelData.modellist[1].line_locationy_4,
+								left_x_negative_angle: irisAngles[1][0][0],
+								left_x_positive_angle: irisAngles[1][0][1],
+								right_x_negative_angle: irisAngles[1][1][0],
+								right_x_positive_angle: irisAngles[1][1][1],
+								left_y_negative_angle: irisAngles[1][4][0],
+								left_y_positive_angle: irisAngles[1][4][1],
+								right_y_negative_angle: irisAngles[1][5][0],
+								right_y_positive_angle: irisAngles[1][5][1]
+							}, {
+								location: modelFiles[2],
+								line_locationx_1: modelData.modellist[2].line_locationx_1,
+								line_locationy_1: modelData.modellist[2].line_locationy_1,
+								line_locationx_2: modelData.modellist[2].line_locationx_2,
+								line_locationy_2: modelData.modellist[2].line_locationy_2,
+								line_locationx_3: modelData.modellist[2].line_locationx_3,
+								line_locationy_3: modelData.modellist[2].line_locationy_3,
+								line_locationx_4: modelData.modellist[2].line_locationx_4,
+								line_locationy_4: modelData.modellist[2].line_locationy_4,
+								left_x_negative_angle: irisAngles[2][0][0],
+								left_x_positive_angle: irisAngles[2][0][1],
+								right_x_negative_angle: irisAngles[2][1][0],
+								right_x_positive_angle: irisAngles[2][1][1],
+								left_y_negative_angle: irisAngles[2][4][0],
+								left_y_positive_angle: irisAngles[2][4][1],
+								right_y_negative_angle: irisAngles[2][5][0],
+								right_y_positive_angle: irisAngles[2][5][1]
+							}
+						]
+					};
+					let a = document.createElement('a');
+					a.href = URL.createObjectURL(new Blob([JSON.stringify(model_data)], {type: 'application/json'}));
+					a.download = 'model_data.json';
+					a.click();
+				}
+				return false;
+			}
+		}
+
+		function readTextFile(file, callback) {
+			var rawFile = new XMLHttpRequest();
+			rawFile.overrideMimeType('application/json');
+			rawFile.open('GET', file, true);
+			rawFile.onreadystatechange = function() {
+				if (rawFile.readyState === 4 && rawFile.status == '200') {
+					callback(rawFile.responseText);
+				}
+			}
+			rawFile.send(null);
+		}
+
+		function onMouseUp(event) {
+			// left
+			if (event.which === 1) {
+				angle = 0;
+				isHoldEye = true;
+				document.body.style.cursor = 'grab';
+				mouseFlagX = mouse.x;
+				//mouseFlagY = mouse.y + (camera.zoom / (camera.zoom * camera.zoom));
+				mouseFlagY = mouse.y;
+			}
+			// right
+			if (event.which === 3) {
+				isHoldEye = false;
+				document.body.style.cursor = 'default';
+			}
+		}
+		
+		function onMouseMove(event) {
+			mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+			mouse.y = - (event.clientY / window.innerHeight) * 2 + 1;
+			mouse.z = 0;
+  			mouse.unproject(camera);
+
+			if (isHoldEye) {
+				if (sceneFlag >= 0 && sceneFlag < SCENE_FLAGS / 2) {
+					if (mouseFlagY < mouse.y) {
+						angle++;
+					}
+					if (mouseFlagY > mouse.y) {
+						angle--;
+					}
+				}
+				if (sceneFlag >= SCENE_FLAGS / 2 && sceneFlag < SCENE_FLAGS) {
+					if (mouseFlagX < mouse.x) {
+						angle++;
+					}
+					if (mouseFlagX > mouse.x) {
+						angle--;
+					}
+				}
+
+				if (angle < irisAngles[modelIdx][sceneFlag][0]) {
+					angle = irisAngles[modelIdx][sceneFlag][0];
+				} else if (angle > irisAngles[modelIdx][sceneFlag][1]) {
+					angle = irisAngles[modelIdx][sceneFlag][1];
+				} else {
+					mouseFlagX = mouse.x;
+					mouseFlagY = mouse.y;
+				}
+
+				if (sceneFlag >= 0 && sceneFlag <= 3) {
+					meshes[modelIdx][sceneIdx].skeleton.bones[eyeIndexes[modelIdx][sceneFlag % 2]].rotation.x = -angle * Math.PI / 180;
+				}
+				if (sceneFlag >= 4 && sceneFlag <= 7) {
+					meshes[modelIdx][sceneIdx].skeleton.bones[eyeIndexes[modelIdx][sceneFlag % 2]].rotation.y = angle * Math.PI / 180;
+				}
+			}
+		}
+
+		function onWindowResize() {
+
+			SCREEN_WIDTH = window.innerWidth;
+			SCREEN_HEIGHT = window.innerHeight;
+			aspect = SCREEN_WIDTH / SCREEN_HEIGHT;
+
+			effect.setSize(SCREEN_WIDTH, SCREEN_HEIGHT);
+
+			camera.left = 0.5 * frustumSize * aspect / - 2;
+			camera.right = 0.5 * frustumSize * aspect / 2;
+			camera.top = frustumSize / 2;
+			camera.bottom = - frustumSize / 2;
+			camera.updateProjectionMatrix();
+
+			camera2.left = 0.25 * frustumSize * aspect / - 2;
+			camera2.right = 0.25 * frustumSize * aspect / 2;
+			camera2.top = 0.5 * frustumSize / 2;
+			camera2.bottom = - 0.5 * frustumSize / 2;
+			camera2.updateProjectionMatrix();
+
+			camera3.left = 0.25 * frustumSize * aspect / - 2;
+			camera3.right = 0.25 * frustumSize * aspect / 2;
+			camera3.top = 0.5 * frustumSize / 2;
+			camera3.bottom = - 0.5 * frustumSize / 2;
+			camera3.updateProjectionMatrix();
+
+			camera4.left = 0.25 * frustumSize * aspect / - 2;
+			camera4.right = 0.25 * frustumSize * aspect / 2;
+			camera4.top = 0.5 * frustumSize / 2;
+			camera4.bottom = - 0.5 * frustumSize / 2;
+			camera4.updateProjectionMatrix();
+
+			camera5.left = 0.25 * frustumSize * aspect / - 2;
+			camera5.right = 0.25 * frustumSize * aspect / 2;
+			camera5.top = 0.5 * frustumSize / 2;
+			camera5.bottom = - 0.5 * frustumSize / 2;
+			camera5.updateProjectionMatrix();
+
+		}
+
+		//
+
+		function animate() {
+
+			requestAnimationFrame(animate);
+			render();
+
+		}
+
+		function render() {
+
+			effect.clear();
+
+			effect.setViewport(0, 0, SCREEN_WIDTH / 2, SCREEN_HEIGHT);
+			effect.render(scenes[sceneIdx], camera);
+
+			effect.setViewport(SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2, SCREEN_WIDTH / 4, SCREEN_HEIGHT / 2);
+			effect.render(scenes[0], camera2);
+
+			effect.setViewport(SCREEN_WIDTH / 2 + SCREEN_WIDTH / 4, SCREEN_HEIGHT / 2, SCREEN_WIDTH / 4, SCREEN_HEIGHT / 2);
+			effect.render(scenes[1], camera3);
+
+			effect.setViewport(SCREEN_WIDTH / 2, 0, SCREEN_WIDTH / 4, SCREEN_HEIGHT / 2);
+			effect.render(scenes[2], camera4);
+
+			effect.setViewport(SCREEN_WIDTH / 2 + SCREEN_WIDTH / 4, 0, SCREEN_WIDTH / 4, SCREEN_HEIGHT / 2);
+			effect.render(scenes[3], camera5);
+
+		}
+	</script>
+
+</body>
+
+</html>
